@@ -37,7 +37,7 @@ class Holism(ops.Object):
     >>> @holism
     >>> class MyCharm(ops.CharmBase):
     >>>     ...
-    >>>     def _some_hook(self, _):
+    >>>     def _some_hook(self, e):
     >>>         if holism.get_relation(e.relation).is_departing or holism.get_relation(e.relation).is_dying:
     >>>             pass
     """
@@ -80,8 +80,32 @@ class Holism(ops.Object):
         original_init = cls.__init__
 
         def init(_self, *args, **kwargs):
-            original_init(_self, *args, **kwargs)
+            # we have to 'break' CharmBase's init in two, because we want holistic-init's
+            # callbacks to fire BEFORE any charm callback fires.
+            ops.Object.__init__(_self, *args, **kwargs)
+
             holistic_init(_self)
+
+            for relation_name in _self.framework.meta.relations:
+                relation_name = relation_name.replace('-', '_')
+                _self.on.define_event(f"{relation_name}_relation_created", ops.RelationCreatedEvent)
+                _self.on.define_event(f"{relation_name}_relation_joined", ops.RelationJoinedEvent)
+                _self.on.define_event(f"{relation_name}_relation_changed", ops.RelationChangedEvent)
+                _self.on.define_event(f"{relation_name}_relation_departed", ops.RelationDepartedEvent)
+                _self.on.define_event(f"{relation_name}_relation_broken", ops.RelationBrokenEvent)
+
+            for storage_name in _self.framework.meta.storages:
+                storage_name = storage_name.replace('-', '_')
+                _self.on.define_event(f"{storage_name}_storage_attached", ops.StorageAttachedEvent)
+                _self.on.define_event(f"{storage_name}_storage_detaching", ops.StorageDetachingEvent)
+
+            for action_name in _self.framework.meta.actions:
+                action_name = action_name.replace('-', '_')
+                _self.on.define_event(f"{action_name}_action", ops.ActionEvent)
+
+            for container_name in _self.framework.meta.containers:
+                container_name = container_name.replace('-', '_')
+                _self.on.define_event(f"{container_name}_pebble_ready", ops.PebbleReadyEvent)
 
         cls.__init__ = init
         return cls
