@@ -75,8 +75,6 @@ class Holism(ops.Object):
 
             self._setup_observers(charm)
 
-        original_init = cls.__init__
-
         def init(_self, *args, **kwargs):
             # we have to 'break' CharmBase's init in two, because we want holistic-init's
             # callbacks to fire BEFORE any charm callback fires.
