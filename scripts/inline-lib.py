@@ -6,6 +6,7 @@ from pathlib import Path
 import jinja2 as jinja2
 
 import sys
+
 sys.path.append(str(Path()))
 
 import __version__

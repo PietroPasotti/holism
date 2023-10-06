@@ -9,6 +9,7 @@ import ops.testing
 @dataclass
 class _RelationState:
     """Represents the state of a relation in juju."""
+
     endpoint: str
     id: int
 
@@ -39,6 +40,7 @@ class Holism(ops.Object):
     >>>         if holism.get_relation(e.relation).is_departing or holism.get_relation(e.relation).is_dying:
     >>>             pass
     """
+
     _stored = ops.StoredState()
 
     def __init__(self):
@@ -47,8 +49,10 @@ class Holism(ops.Object):
     @property
     def relations(self) -> Dict[str, _RelationState]:
         """Mapping from relation endpoints to their known state."""
-        return {endpoint: _RelationState(**meta) for endpoint, meta in
-                self._stored.relations.items()}
+        return {
+            endpoint: _RelationState(**meta)
+            for endpoint, meta in self._stored.relations.items()
+        }
 
     def get_relation(self, relation: Union[str, ops.Relation]):
         relation_name = relation if isinstance(relation, str) else relation.name
@@ -64,58 +68,37 @@ class Holism(ops.Object):
         """
 
         def holistic_init(charm):
-            ops.Object.__init__(
-                self,
-                parent=charm,
-                key="__holism__")
+            ops.Object.__init__(self, parent=charm, key="__holism__")
 
-            self._stored.set_default(
-                relations={}
-            )
+            self._stored.set_default(relations={})
 
             self._setup_observers(charm)
 
-        def init(_self, *args, **kwargs):
-            # we have to 'break' CharmBase's init in two, because we want holistic-init's
-            # callbacks to fire BEFORE any charm callback fires.
-            ops.Object.__init__(_self, *args, **kwargs)
+        original_init = ops.CharmBase.__init__
 
+        def init(_self, framework):
+            # we have to 'break' charm_type's init in two, because we want holistic-init's
+            # callbacks to fire BEFORE any charm callback fires.
+            original_init(_self, framework)
             holistic_init(_self)
 
-            for relation_name in _self.framework.meta.relations:
-                relation_name = relation_name.replace('-', '_')
-                _self.on.define_event(f"{relation_name}_relation_created", ops.RelationCreatedEvent)
-                _self.on.define_event(f"{relation_name}_relation_joined", ops.RelationJoinedEvent)
-                _self.on.define_event(f"{relation_name}_relation_changed", ops.RelationChangedEvent)
-                _self.on.define_event(f"{relation_name}_relation_departed", ops.RelationDepartedEvent)
-                _self.on.define_event(f"{relation_name}_relation_broken", ops.RelationBrokenEvent)
-
-            for storage_name in _self.framework.meta.storages:
-                storage_name = storage_name.replace('-', '_')
-                _self.on.define_event(f"{storage_name}_storage_attached", ops.StorageAttachedEvent)
-                _self.on.define_event(f"{storage_name}_storage_detaching", ops.StorageDetachingEvent)
-
-            for action_name in _self.framework.meta.actions:
-                action_name = action_name.replace('-', '_')
-                _self.on.define_event(f"{action_name}_action", ops.ActionEvent)
-
-            for container_name in _self.framework.meta.containers:
-                container_name = container_name.replace('-', '_')
-                _self.on.define_event(f"{container_name}_pebble_ready", ops.PebbleReadyEvent)
-
-        cls.__init__ = init
+        ops.CharmBase.__init__ = init
         return cls
 
     def _setup_observers(self, charm: ops.testing.CharmType):
         """Register observers on the charm to be able to monitor its state."""
         observe = self.framework.observe
         observed_events = []
-        for endpoint in chain(charm.meta.provides, charm.meta.requires, charm.meta.peers):
-            for event in [charm.on[endpoint].relation_created,
-                          charm.on[endpoint].relation_changed,
-                          charm.on[endpoint].relation_broken,
-                          charm.on[endpoint].relation_joined,
-                          charm.on[endpoint].relation_departed]:
+        for endpoint in chain(
+            charm.meta.provides, charm.meta.requires, charm.meta.peers
+        ):
+            for event in [
+                charm.on[endpoint].relation_created,
+                charm.on[endpoint].relation_changed,
+                charm.on[endpoint].relation_broken,
+                charm.on[endpoint].relation_joined,
+                charm.on[endpoint].relation_departed,
+            ]:
                 observe(event, self._process_relation)
                 observed_events.append(event)
 
@@ -146,15 +129,15 @@ class Holism(ops.Object):
 
     def _break(self, relation: ops.Relation):
         state = self._stored.relations[relation.name]
-        state['is_breaking'] = True
+        state["is_breaking"] = True
 
     def _join(self, relation: ops.Relation, unit: ops.Unit):
         state = self._stored.relations[relation.name]
-        state['joining_units'] += (unit.name,)
+        state["joining_units"] += (unit.name,)
 
     def _depart(self, relation: ops.Relation, unit: ops.Unit):
         state = self._stored.relations[relation.name]
-        state['departing_units'] += (unit.name,)
+        state["departing_units"] += (unit.name,)
 
     def _update_transients(self, e: ops.EventBase):
         self._forget_departed_and_joined_units(e)
@@ -171,8 +154,12 @@ class Holism(ops.Object):
             keep_departing = e.unit.name
 
         for relation, meta in self.relations.items():
-            meta.joining_units = tuple(u for u in meta.joining_units if u != keep_joining)
-            meta.departing_units = tuple(u for u in meta.departing_units if u != keep_departing)
+            meta.joining_units = tuple(
+                u for u in meta.joining_units if u != keep_joining
+            )
+            meta.departing_units = tuple(
+                u for u in meta.departing_units if u != keep_departing
+            )
 
     def _forget_broken_relations(self, e: ops.EventBase):
         for relation, meta in self.relations.items():
@@ -190,12 +177,16 @@ class Holism(ops.Object):
     def _to_unit_name(unit: Union[str, ops.Unit]) -> str:
         return unit if isinstance(unit, str) else unit.name
 
-    def is_joining(self, relation: Union[str, ops.Relation], unit: Union[str, ops.Unit]):
+    def is_joining(
+        self, relation: Union[str, ops.Relation], unit: Union[str, ops.Unit]
+    ):
         """Last we heard, was this unit joining this relation?"""
         relation = self.get_relation(relation)
         return self._to_unit_name(unit) in relation.joining_units
 
-    def is_departing(self, relation: Union[str, ops.Relation], unit: Union[str, ops.Unit]):
+    def is_departing(
+        self, relation: Union[str, ops.Relation], unit: Union[str, ops.Unit]
+    ):
         """Last we heard, was this unit departing this relation?"""
         relation = self.get_relation(relation)
         return self._to_unit_name(unit) in relation.departing_units

@@ -3,6 +3,7 @@
 from pathlib import Path
 
 import sys
+
 sys.path.append(str(Path()))
 
 import __version__
