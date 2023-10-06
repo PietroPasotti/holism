@@ -1,11 +1,9 @@
-import types
 from dataclasses import dataclass
 from itertools import chain
 from typing import Union, Dict, List
 
 import ops
 import ops.testing
-from ops import Framework
 
 
 @dataclass
