@@ -54,7 +54,8 @@ class Holism(ops.Object):
             for endpoint, meta in self._stored.relations.items()
         }
 
-    def get_relation(self, relation: Union[str, ops.Relation]):
+    def get_relation(self, relation: Union[str, ops.Relation]) -> _RelationState:
+        """Get known state for this relation."""
         relation_name = relation if isinstance(relation, str) else relation.name
         try:
             return self.relations[relation_name]
@@ -197,7 +198,6 @@ class Holism(ops.Object):
         If we have received a relation-broken at least "one event ago", then the relation is dead.
         Otherwise, it's alive.
         """
-
         try:
             self.get_relation(relation)
         except RelationNotFoundError:
