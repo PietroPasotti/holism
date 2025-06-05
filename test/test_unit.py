@@ -3,6 +3,7 @@ from ops import CharmBase, Framework
 
 from holism import testing, _Holism
 
+
 def test_event_emission():
     class MyCharm(CharmBase):
         called = False
@@ -85,6 +86,7 @@ def test_status_holistically_set():
         h.charm.unit.status = status
 
     assert testing.state_out.unit_status == status
+
 
 def test_status_charm_set():
     status = ops.ActiveStatus("foo")

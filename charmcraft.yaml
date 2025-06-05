@@ -1,5 +1,13 @@
 name: holism  # $ TEMPLATE: Filled in by ./scripts/init.sh
+type: charm
 description: |  
   Library charm for: holism
 summary: |
   Library charm for: holism
+
+platforms:
+  ubuntu@24.04:amd64:
+
+parts:
+  charm:
+    source: .

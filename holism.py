@@ -13,10 +13,11 @@ class Reductionism(RuntimeError):  # lol
 
 
 class _Manager(ops._main._Manager):
-    def run(self,
-            emit: bool = True,
-            evaluate_status: bool = True,
-            ):
+    def run(
+        self,
+        emit: bool = True,
+        evaluate_status: bool = True,
+    ):
         """Emit and then commit the framework."""
         try:
             if emit:
@@ -58,34 +59,33 @@ class _Manager(ops._main._Manager):
 
 @contextmanager
 def holism(
-        charm_class: typing.Type[ops.CharmBase] = None,
-        use_juju_for_storage: bool = False,
-        emit: bool = True,
-        evaluate_status: bool = True,
-        _mgr: scenario.context.Manager = None
+    charm_class: typing.Type[ops.CharmBase] = None,
+    use_juju_for_storage: bool = False,
+    emit: bool = True,
+    evaluate_status: bool = True,
+    _mgr: scenario.context.Manager = None,
 ):
     """Add some holism to your charm."""
-    framework=None
-    charm_instance=None
+    framework = None
+    charm_instance = None
     if _mgr:
         # we're testing
         # h = _Holism(
-        charm_class=_mgr.charm.__class__
-        charm_instance=_mgr.charm
-        framework=_mgr.ops.framework
+        charm_class = _mgr.charm.__class__
+        charm_instance = _mgr.charm
+        framework = _mgr.ops.framework
 
     # this is largely copied from ops._main.main
     manager = None
     try:
         manager = _mgr or _Manager(
-            charm_class or ops.CharmBase,
-            use_juju_for_storage=use_juju_for_storage)
-        with manager.run(
-                emit=emit,
-                evaluate_status=evaluate_status
-        ):
-            h = _Holism(charm=charm_instance or manager.charm,
-                        framework=framework or manager.framework)
+            charm_class or ops.CharmBase, use_juju_for_storage=use_juju_for_storage
+        )
+        with manager.run(emit=emit, evaluate_status=evaluate_status):
+            h = _Holism(
+                charm=charm_instance or manager.charm,
+                framework=framework or manager.framework,
+            )
             yield h
 
     except ops._main._Abort as e:
@@ -98,9 +98,7 @@ def holism(
 class _Holism:
     """Holistic framework context."""
 
-    def __init__(self,
-                 framework: ops.framework.Framework,
-                 charm: ops.CharmBase):
+    def __init__(self, framework: ops.framework.Framework, charm: ops.CharmBase):
         self.framework = framework
 
         self.model = charm.model
@@ -119,14 +117,13 @@ class testing:
 
     @contextmanager
     @staticmethod
-    def mgr(charm_class: typing.Type[ops.CharmBase],
-            charm_meta: dict):
+    def mgr(charm_class: typing.Type[ops.CharmBase], charm_meta: dict):
         """Helper to set up a mgr fixture."""
 
         # we use scenario to help us set up a viable environ
         # however, we also don't want to emit any event since we're in charge of that
         @contextmanager
-        def patched_run(self: scenario.Manager, emit:bool, **kwargs):
+        def patched_run(self: scenario.Manager, emit: bool, **kwargs):
             self._emitted = True
             if emit:
                 self.ops.run()
@@ -145,22 +142,21 @@ class testing:
     @contextmanager
     @staticmethod
     def holism(
-            charm_class: typing.Type[ops.CharmBase] = None,
-            use_juju_for_storage: bool = False,
-            emit: bool = True,
-            evaluate_status: bool = True,
-
-            # testing-specific args
-            meta: dict = None
+        charm_class: typing.Type[ops.CharmBase] = None,
+        use_juju_for_storage: bool = False,
+        emit: bool = True,
+        evaluate_status: bool = True,
+        # testing-specific args
+        meta: dict = None,
     ):
         """Helper to set up a holism fixture for testing."""
         charm_class = charm_class or ops.CharmBase
         meta = meta or {"name": "robin"}
         with testing.mgr(charm_class, meta) as mgr:
             with holism(
-                    _mgr=mgr,
-                    use_juju_for_storage=use_juju_for_storage,
-                    emit=emit,
-                    evaluate_status=evaluate_status,
+                _mgr=mgr,
+                use_juju_for_storage=use_juju_for_storage,
+                emit=emit,
+                evaluate_status=evaluate_status,
             ) as h:
                 yield h
