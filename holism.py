@@ -65,29 +65,27 @@ def holism(
         _mgr: scenario.context.Manager = None
 ):
     """Add some holism to your charm."""
+    framework=None
+    charm_instance=None
     if _mgr:
         # we're testing
-        h = _Holism(
-            charm=_mgr.charm,
-            framework=_mgr.ops.framework,
-            evaluate_status=ops.charm._evaluate_status(_mgr.charm)  # noqa
-        )
-        yield h
-        return
+        # h = _Holism(
+        charm_class=_mgr.charm.__class__
+        charm_instance=_mgr.charm
+        framework=_mgr.ops.framework
 
     # this is largely copied from ops._main.main
     manager = None
     try:
-        manager = _Manager(
+        manager = _mgr or _Manager(
             charm_class or ops.CharmBase,
             use_juju_for_storage=use_juju_for_storage)
         with manager.run(
                 emit=emit,
                 evaluate_status=evaluate_status
         ):
-            h = _Holism(charm=manager.charm,
-                        framework=manager.framework,
-                        evaluate_status=manager.evaluate_status)
+            h = _Holism(charm=charm_instance or manager.charm,
+                        framework=framework or manager.framework)
             yield h
 
     except ops._main._Abort as e:
@@ -102,8 +100,7 @@ class _Holism:
 
     def __init__(self,
                  framework: ops.framework.Framework,
-                 charm: ops.CharmBase,
-                 evaluate_status: Callable):
+                 charm: ops.CharmBase):
         self.framework = framework
 
         self.model = charm.model
@@ -114,7 +111,7 @@ class _Holism:
         self.app = charm.app
         self.config = charm.config
 
-        self.evaluate_status = evaluate_status
+        self.evaluate_status = lambda: ops.charm._evaluate_status(charm)
 
 
 class testing:
@@ -128,12 +125,17 @@ class testing:
 
         # we use scenario to help us set up a viable environ
         # however, we also don't want to emit any event since we're in charge of that
-        def patched_run(self: scenario.Manager):
+        @contextmanager
+        def patched_run(self: scenario.Manager, emit:bool, **kwargs):
             self._emitted = True
+            if emit:
+                self.ops.run()
+            yield
 
         _ctx = scenario.Context(charm_class, meta=charm_meta)
         with patch.object(scenario.Manager, "run", new=patched_run):
             with _ctx(_ctx.on.update_status(), scenario.State()) as mgr:
+                mgr._destroy = lambda: None
                 yield mgr
 
                 # wrap up Runtime.exec() so that we can gather the output state
@@ -157,7 +159,6 @@ class testing:
         with testing.mgr(charm_class, meta) as mgr:
             with holism(
                     _mgr=mgr,
-                    charm_class=charm_class,
                     use_juju_for_storage=use_juju_for_storage,
                     emit=emit,
                     evaluate_status=evaluate_status,
