@@ -1,209 +1,165 @@
-from dataclasses import dataclass
-from itertools import chain
-from typing import Union, Dict, List
+import sys
+import typing
+from contextlib import contextmanager
+from typing import Callable
+from unittest.mock import patch
 
 import ops
-import ops.testing
-
-
-@dataclass
-class _RelationState:
-    """Represents the state of a relation in juju."""
-
-    endpoint: str
-    id: int
-
-    joining_units: List[str] = ()
-    departing_units: List[str] = ()
-    is_breaking: bool = False
+import scenario
 
 
 class Reductionism(RuntimeError):  # lol
     """Base class for all holistic errors."""
 
 
-class RelationNotFoundError(Reductionism):
-    """Raised when a relation is not found in stored state."""
-
-
-class Holism(ops.Object):
-    """Adds some holism to your charm.
-
-    Usage:
-    >>> from ...holism import Holism
-    >>> holism = Holism()
-    ...
-    >>> @holism
-    >>> class MyCharm(ops.CharmBase):
-    >>>     ...
-    >>>     def _some_hook(self, e):
-    >>>         if holism.get_relation(e.relation).is_departing or holism.get_relation(e.relation).is_dying:
-    >>>             pass
-    """
-
-    _stored = ops.StoredState()
-
-    def __init__(self):
-        pass
-
-    @property
-    def relations(self) -> Dict[str, _RelationState]:
-        """Mapping from relation endpoints to their known state."""
-        return {
-            endpoint: _RelationState(**meta)
-            for endpoint, meta in self._stored.relations.items()
-        }
-
-    def get_relation(self, relation: Union[str, ops.Relation]) -> _RelationState:
-        """Get known state for this relation."""
-        relation_name = relation if isinstance(relation, str) else relation.name
+class _Manager(ops._main._Manager):
+    def run(self,
+            emit: bool = True,
+            evaluate_status: bool = True,
+            ):
+        """Emit and then commit the framework."""
         try:
-            return self.relations[relation_name]
-        except KeyError:
-            raise RelationNotFoundError(relation_name)
+            if emit:
+                self._emit(evaluate_status=evaluate_status)
+            if not emit and evaluate_status:
+                raise Reductionism(f"invalid args combo: {emit=}, {evaluate_status=}")
 
-    def __call__(self, cls: ops.testing.CharmType):
-        """Set up holism with this charm class.
+            # interrupt execution, to give holism a chance to do stuff
+            # before we commit, evaluate status and close
+            yield
 
-        This makes Holism usable as a charm class decorator.
-        """
+            self._commit()
+            self._close()
+        finally:
+            self.framework.close()
 
-        def holistic_init(charm):
-            ops.Object.__init__(self, parent=charm, key="__holism__")
+    def _emit(self, evaluate_status: bool = False):
+        """Emit the event on the charm."""
+        # TODO: Remove the collect_metrics check below as soon as the relevant
+        #       Juju changes are made. Also adjust the docstring on
+        #       EventBase.defer().
+        #
+        # Skip reemission of deferred events for collect-metrics events because
+        # they do not have the full access to all hook tools.
+        if not self.dispatcher.is_restricted_context():
+            # Re-emit any deferred events from the previous run.
+            self.framework.reemit()
 
-            self._stored.set_default(relations={})
+        # Emit the Juju event.
+        self._emit_charm_event(self.dispatcher.event_name)
+        # Emit collect-status events.
+        if evaluate_status:
+            self.evaluate_status()
 
-            self._setup_observers(charm)
+    def evaluate_status(self):
+        """Emit collect-*-status."""
+        ops.charm._evaluate_status(self.charm)
 
-        original_init = ops.CharmBase.__init__
 
-        def init(_self, framework):
-            # we have to 'break' charm_type's init in two, because we want holistic-init's
-            # callbacks to fire BEFORE any charm callback fires.
-            original_init(_self, framework)
-            holistic_init(_self)
+@contextmanager
+def holism(
+        charm_class: typing.Type[ops.CharmBase] = None,
+        use_juju_for_storage: bool = False,
+        emit: bool = True,
+        evaluate_status: bool = True,
+        _mgr: scenario.context.Manager = None
+):
+    """Add some holism to your charm."""
+    if _mgr:
+        # we're testing
+        h = _Holism(
+            charm=_mgr.charm,
+            framework=_mgr.ops.framework,
+            evaluate_status=ops.charm._evaluate_status(_mgr.charm)  # noqa
+        )
+        yield h
+        return
 
-        ops.CharmBase.__init__ = init
-        return cls
-
-    def _setup_observers(self, charm: ops.testing.CharmType):
-        """Register observers on the charm to be able to monitor its state."""
-        observe = self.framework.observe
-        observed_events = []
-        for endpoint in chain(
-            charm.meta.provides, charm.meta.requires, charm.meta.peers
+    # this is largely copied from ops._main.main
+    manager = None
+    try:
+        manager = _Manager(
+            charm_class or ops.CharmBase,
+            use_juju_for_storage=use_juju_for_storage)
+        with manager.run(
+                emit=emit,
+                evaluate_status=evaluate_status
         ):
-            for event in [
-                charm.on[endpoint].relation_created,
-                charm.on[endpoint].relation_changed,
-                charm.on[endpoint].relation_broken,
-                charm.on[endpoint].relation_joined,
-                charm.on[endpoint].relation_departed,
-            ]:
-                observe(event, self._process_relation)
-                observed_events.append(event)
+            h = _Holism(charm=manager.charm,
+                        framework=manager.framework,
+                        evaluate_status=manager.evaluate_status)
+            yield h
 
-        for event in charm.on.events().values():
-            # event is a good chance to clean-up relations previously marked as `breaking`,
-            # and remove units from the joining/departing lists
-            observe(event, self._update_transients)
+    except ops._main._Abort as e:
+        sys.exit(e.exit_code)
+    finally:
+        if manager:
+            manager._destroy()
 
-    def _process_relation(self, e: ops.RelationEvent):
-        if isinstance(e, ops.charm.RelationCreatedEvent):
-            self._create(e.relation)
-        elif isinstance(e, ops.charm.RelationBrokenEvent):
-            self._break(e.relation)
-        elif isinstance(e, ops.charm.RelationJoinedEvent):
-            self._join(e.relation, e.unit)
-        elif isinstance(e, ops.charm.RelationDepartedEvent):
-            self._depart(e.relation, e.unit)
-        else:  # ops.charm.RelationChangedEvent = no-op
-            pass
 
-        self._update_transients(e)
+class _Holism:
+    """Holistic framework context."""
 
-    def _create(self, relation: ops.Relation):
-        self._stored.relations[relation.name] = {
-            "id": relation.id,
-            "endpoint": relation.name,
-        }
+    def __init__(self,
+                 framework: ops.framework.Framework,
+                 charm: ops.CharmBase,
+                 evaluate_status: Callable):
+        self.framework = framework
 
-    def _break(self, relation: ops.Relation):
-        state = self._stored.relations[relation.name]
-        state["is_breaking"] = True
+        self.model = charm.model
+        self.meta = charm.meta
+        self.charm_dir = charm.charm_dir
+        self.charm = charm
+        self.unit = charm.unit
+        self.app = charm.app
+        self.config = charm.config
 
-    def _join(self, relation: ops.Relation, unit: ops.Unit):
-        state = self._stored.relations[relation.name]
-        state["joining_units"] += (unit.name,)
+        self.evaluate_status = evaluate_status
 
-    def _depart(self, relation: ops.Relation, unit: ops.Unit):
-        state = self._stored.relations[relation.name]
-        state["departing_units"] += (unit.name,)
 
-    def _update_transients(self, e: ops.EventBase):
-        self._forget_departed_and_joined_units(e)
-        self._forget_broken_relations(e)
+class testing:
+    state_out: scenario.State = None
 
-    def _forget_departed_and_joined_units(self, e: ops.EventBase):
-        keep_joining = keep_departing = None
-
-        # if we are processing a relation-joined event about this relation, the unit is still joining
-        if isinstance(e, ops.charm.RelationJoinedEvent):
-            keep_joining = e.unit.name
-        # same for departing
-        if isinstance(e, ops.charm.RelationDepartedEvent):
-            keep_departing = e.unit.name
-
-        for relation, meta in self.relations.items():
-            meta.joining_units = tuple(
-                u for u in meta.joining_units if u != keep_joining
-            )
-            meta.departing_units = tuple(
-                u for u in meta.departing_units if u != keep_departing
-            )
-
-    def _forget_broken_relations(self, e: ops.EventBase):
-        for relation, meta in self.relations.items():
-            # if we are processing an event about this relation, we're not ready to forget it just yet
-            if isinstance(e, ops.charm.RelationEvent) and e.relation.name == relation:
-                continue
-
-            if meta.is_breaking:
-                self._forget(relation)
-
-    def _forget(self, relation: str):
-        del self._stored.relations[relation]
-
+    @contextmanager
     @staticmethod
-    def _to_unit_name(unit: Union[str, ops.Unit]) -> str:
-        return unit if isinstance(unit, str) else unit.name
+    def mgr(charm_class: typing.Type[ops.CharmBase],
+            charm_meta: dict):
+        """Helper to set up a mgr fixture."""
 
-    def is_joining(
-        self, relation: Union[str, ops.Relation], unit: Union[str, ops.Unit]
+        # we use scenario to help us set up a viable environ
+        # however, we also don't want to emit any event since we're in charge of that
+        def patched_run(self: scenario.Manager):
+            self._emitted = True
+
+        _ctx = scenario.Context(charm_class, meta=charm_meta)
+        with patch.object(scenario.Manager, "run", new=patched_run):
+            with _ctx(_ctx.on.update_status(), scenario.State()) as mgr:
+                yield mgr
+
+                # wrap up Runtime.exec() so that we can gather the output state
+                mgr._wrapped_ctx.__exit__(None, None, None)
+            testing.state_out = mgr._ctx._output_state
+
+    @contextmanager
+    @staticmethod
+    def holism(
+            charm_class: typing.Type[ops.CharmBase] = None,
+            use_juju_for_storage: bool = False,
+            emit: bool = True,
+            evaluate_status: bool = True,
+
+            # testing-specific args
+            meta: dict = None
     ):
-        """Last we heard, was this unit joining this relation?"""
-        relation = self.get_relation(relation)
-        return self._to_unit_name(unit) in relation.joining_units
-
-    def is_departing(
-        self, relation: Union[str, ops.Relation], unit: Union[str, ops.Unit]
-    ):
-        """Last we heard, was this unit departing this relation?"""
-        relation = self.get_relation(relation)
-        return self._to_unit_name(unit) in relation.departing_units
-
-    def is_alive(self, relation: Union[str, ops.Relation]):
-        """Is this relation (still) alive?
-
-        If we have received a relation-broken at least "one event ago", then the relation is dead.
-        Otherwise, it's alive.
-        """
-        try:
-            self.get_relation(relation)
-        except RelationNotFoundError:
-            return False
-        return True
-
-    def is_breaking(self, relation: Union[str, ops.Relation]):
-        """Last we heard, was this relation breaking?"""
-        return self.get_relation(relation).is_breaking
+        """Helper to set up a holism fixture for testing."""
+        charm_class = charm_class or ops.CharmBase
+        meta = meta or {"name": "robin"}
+        with testing.mgr(charm_class, meta) as mgr:
+            with holism(
+                    _mgr=mgr,
+                    charm_class=charm_class,
+                    use_juju_for_storage=use_juju_for_storage,
+                    emit=emit,
+                    evaluate_status=evaluate_status,
+            ) as h:
+                yield h

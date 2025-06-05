@@ -1,35 +1,100 @@
-import pytest
-from ops import CharmBase
-from scenario import Context, State, Relation
+import ops
+from ops import CharmBase, Framework
 
-from holism import Holism, RelationNotFoundError
+from holism import testing, _Holism
 
-holism = Holism()
+def test_event_emission():
+    class MyCharm(CharmBase):
+        called = False
+
+        def __init__(self, fw):
+            super().__init__(fw)
+            fw.observe(self.on.update_status, self._on_smh)
+
+        def _on_smh(self, e):
+            self.called = True
+
+    with testing.holism(MyCharm) as h:
+        pass
+
+    assert h.charm.called
 
 
-@holism
-class MyCharm(CharmBase):
-    pass
+def test_reconciler():
+    class MyCharm(CharmBase):
+        called = False
+        reconciled = False
+
+        def __init__(self, fw):
+            super().__init__(fw)
+            fw.observe(self.on.update_status, self._on_smh)
+
+        def _on_smh(self, e):
+            self.called = True
+
+        def reconcile(self):
+            self.reconciled = True
+
+    with testing.holism(MyCharm) as h:
+        h.charm.reconcile()
+
+    assert h.charm.called
+    assert h.charm.reconciled
 
 
-def test_holism():
-    ctx = Context(MyCharm, meta={"name": "test-holism"})
-    with ctx.manager("start", State()) as mgr:
-        assert not holism.relations
+def test_reconciler_no_emit():
+    class MyCharm(CharmBase):
+        called = False
+        reconciled = False
+
+        def __init__(self, fw):
+            super().__init__(fw)
+            fw.observe(self.on.update_status, self._on_smh)
+
+        def _on_smh(self, e):
+            self.called = True
+
+        def reconcile(self):
+            self.reconciled = True
+
+    with testing.holism(MyCharm, emit=False) as h:
+        h.charm.reconcile()
+
+    assert not h.charm.called
+    assert h.charm.reconciled
 
 
-def test_relation_create():
-    ctx = Context(
-        MyCharm, meta={"name": "test-holism", "requires": {"foo": {"interface": "bar"}}}
-    )
-    foo = Relation("foo")
-    with ctx.manager(foo.created_event, State(relations=[foo])) as mgr:
-        with pytest.raises(RelationNotFoundError):
-            _foo = holism.get_relation("foo")
+def test_state():
+    class MyCharm(CharmBase):
+        pass
 
-        mgr.run()
+    with testing.holism(MyCharm, emit=False) as h:
+        h: _Holism
 
-        _foo = holism.get_relation("foo")
-        assert _foo.endpoint == "foo"
-        assert not _foo.joining_units
-        assert not _foo.departing_units
+    assert testing.state_out
+
+
+def test_status_holistically_set():
+    class MyCharm(CharmBase):
+        pass
+
+    status = ops.ActiveStatus("foo")
+
+    with testing.holism(MyCharm, emit=False) as h:
+        h: _Holism
+        h.charm.unit.status = status
+
+    assert testing.state_out.unit_status == status
+
+def test_status_charm_set():
+    status = ops.ActiveStatus("foo")
+
+    class MyCharm(CharmBase):
+        def __init__(self, framework: Framework):
+            super().__init__(framework)
+            self.unit.status = status
+
+    with testing.holism(MyCharm, emit=False) as h:
+        h: _Holism
+
+    assert testing.state_out.unit_status == status
