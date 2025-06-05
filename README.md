@@ -52,6 +52,10 @@ def reconcile(app:ops.Application, unit:ops.Unit, relation:ops.Relation):
     relation.data[app]['foo'] = 'bar!'
     unit.status = ops.ActiveStatus("I've been reconciled!")
 
+    # nothing prevents you from using regular ops.Object s in here,
+    # so long as their API allows it...
+    ipa = IngressPerAppRequirer(..., relation=relation)
+    ipa.get_address()
 
 if __name__ == '__main__':
     from holism import holism
